@@ -133,6 +133,15 @@ class SequenceRegistrationWidget(ScriptedLoadableModuleWidget):
     self.sequenceFixedItemIndexWidget.setToolTip("Set the frame of the input sequence to use as the fixed volume (that all other volumes will be registered to.")
     advancedFormLayout.addRow("Fixed frame index:", self.sequenceFixedItemIndexWidget)
 
+    #
+    # JU 02/05/2024: Option to register fixed volume to itself (to replicate filters applied during processing steps):
+    self.registerFixedVolumeToItselfCheckBox = qt.QCheckBox(" ")
+    self.registerFixedVolumeToItselfCheckBox.checked = False
+    label = qt.QLabel("Register Fixed volume to itself:")
+    label.setToolTip("Select to run the registration algorithm to the fixed volume.")
+    self.registerFixedVolumeToItselfCheckBox.setToolTip("Register Fixed volume to itself.")
+    advancedFormLayout.addRow(label, self.registerFixedVolumeToItselfCheckBox)
+
     # Sequence start index
     self.sequenceStartItemIndexWidget = ctk.ctkSliderWidget()
     self.sequenceStartItemIndexWidget.minimum = 0
@@ -235,6 +244,8 @@ class SequenceRegistrationWidget(ScriptedLoadableModuleWidget):
     self.showDetailedLogDuringExecutionCheckBox.connect("toggled(bool)", self.onShowLogToggled)
     # Check if user selects to create a new preset
     self.registrationPresetSelector.connect("activated(int)", self.onCreatePresetPressed)
+    # JU 02/05/2024 connect the register-to-itself checkbox:
+    self.registerFixedVolumeToItselfCheckBox.connect("toggled(bool)", self.onRegisterToItselfToggled)
 
 
     # Add vertical spacer
@@ -436,10 +447,11 @@ class SequenceRegistrationWidget(ScriptedLoadableModuleWidget):
       endFrameIndex = int(self.sequenceEndItemIndexWidget.value)
       self.logic.elastixLogic.setCustomElastixBinDir(self.customElastixBinDirSelector.currentPath)
       self.logic.logStandardOutput = self.showDetailedLogDuringExecutionCheckBox.checked
+      # JU 02/05/2024: Added input argument self.registerFixedVolumeToItself
       self.logic.registerVolumeSequence(self.inputSelector.currentNode(),
         self.outputVolumesSelector.currentNode(), self.outputTransformSelector.currentNode(),
         fixedFrameIndex, self.registrationPresetSelector.currentIndex, computeMovingToFixedTransform,
-        startFrameIndex, endFrameIndex)
+        startFrameIndex, endFrameIndex, self.registerFixedVolumeToItself)
     except Exception as e:
       print(e)
       self.addLog("Error: {0}".format(str(e)))
@@ -467,6 +479,10 @@ class SequenceRegistrationWidget(ScriptedLoadableModuleWidget):
 
   def onShowLogToggled(self, toggle):
     self.logic.elastixLogic.logStandardOutput = toggle
+
+  # JU 02/05/2024 connect the register-to-itself to the logic component:
+  def onRegisterToItselfToggled(self, toggle):
+    self.registerFixedVolumeToItself = toggle
 
 #
 # SequenceRegistrationLogic
@@ -499,9 +515,10 @@ class SequenceRegistrationLogic(ScriptedLoadableModuleLogic):
       if browserNode.IsSynchronizedSequenceNode(sequenceNode, True):
         return browserNode
     return None
-
+  
+  # JU 02/05/2024: Added input argument registerFixedVolumeToItself with default value FALSE
   def registerVolumeSequence(self, inputVolSeq, outputVolSeq, outputTransformSeq, fixedVolumeItemNumber, presetIndex, computeMovingToFixedTransform = True,
-    startFrameIndex=None, endFrameIndex=None):
+    startFrameIndex=None, endFrameIndex=None, registeredFixedToItself=False):
     """
     computeMovingToFixedTransform: if True then moving->fixed else fixed->moving transforms are computed
     """
@@ -557,7 +574,9 @@ class SequenceRegistrationLogic(ScriptedLoadableModuleLogic):
         sequencesModule.logic().UpdateProxyNodesFromSequences(movingSeqBrowser)
         movingVolume = movingSeqBrowser.GetProxyNode(inputVolSeq)
 
-        if movingVolumeItemNumber != fixedVolumeItemNumber:
+        # if movingVolumeItemNumber != fixedVolumeItemNumber:
+        # JU 02/05/2024: Include the registered-to-itself flag:
+        if (movingVolumeItemNumber != fixedVolumeItemNumber) | registeredFixedToItself:
           self.elastixLogic.registerVolumes(
             fixedVolume, movingVolume,
             outputVolumeNode = outputVol,
