@@ -115,6 +115,26 @@ class SequenceRegistrationWidget(ScriptedLoadableModuleWidget):
     self.registrationPresetSelector.addItem("*NEW*")
     self.newPresetIndex = self.registrationPresetSelector.count - 1
     parametersFormLayout.addRow("Preset:", self.registrationPresetSelector)
+    
+    #
+    # Pre-Processing Area (JU 04/05/2024)
+    #
+    
+    preProcCollapsibleButton = ctk.ctkCollapsibleButton()
+    preProcCollapsibleButton.text = "Pre-Processing"
+    preProcCollapsibleButton.collapsed = 1
+    self.layout.addWidget(preProcCollapsibleButton)
+    
+    # Layout within the dummy collapsible button (JU 04/05/2024)
+    preProcFormLayout = qt.QFormLayout(preProcCollapsibleButton)
+    
+    # Select to apply bias correction filter (N4ITK)
+    self.applyN4ITKBiasCorrectionCheckbox = qt.QCheckBox(" ")
+    self.applyN4ITKBiasCorrectionCheckbox.checked = False
+    label = qt.QLabel("Apply N4ITK Bias Correction:")
+    label.setToolTip("Select to apply bias correction prior to registration.")
+    self.applyN4ITKBiasCorrectionCheckbox.setToolTip("Apply bias correction prior to registration.")
+    preProcFormLayout.addRow(label, self.applyN4ITKBiasCorrectionCheckbox)
 
     #
     # Advanced Area
@@ -249,6 +269,7 @@ class SequenceRegistrationWidget(ScriptedLoadableModuleWidget):
     # Check if user selects to create a new preset
     self.registrationPresetSelector.connect("activated(int)", self.onCreatePresetPressed)
     # JU 08/05/2024 connect the register-to-itself checkbox:
+    self.applyN4ITKBiasCorrectionCheckbox.connect("toggled(bool)", self.onApplyBiasCorrectionToggled)
     self.registerFixedVolumeToItselfCheckBox.connect("toggled(bool)", self.onRegisterToItselfToggled)
 
 
@@ -452,10 +473,11 @@ class SequenceRegistrationWidget(ScriptedLoadableModuleWidget):
       self.logic.elastixLogic.setCustomElastixBinDir(self.customElastixBinDirSelector.currentPath)
       self.logic.logStandardOutput = self.showDetailedLogDuringExecutionCheckBox.checked
       # JU 08/05/2024: Appended input argument self.registerFixedVolumeToItself
+      # JU 04/05/2024: Added input argument self.applyBiasCorrection
       self.logic.registerVolumeSequence(self.inputSelector.currentNode(),
         self.outputVolumesSelector.currentNode(), self.outputTransformSelector.currentNode(),
         fixedFrameIndex, self.registrationPresetSelector.currentIndex, computeMovingToFixedTransform,
-        startFrameIndex, endFrameIndex, self.registerFixedVolumeToItself)
+        startFrameIndex, endFrameIndex, self.registerFixedVolumeToItself, self.applyBiasCorrection)
     except Exception as e:
       print(e)
       self.addLog("Error: {0}".format(str(e)))
@@ -488,6 +510,10 @@ class SequenceRegistrationWidget(ScriptedLoadableModuleWidget):
   def onRegisterToItselfToggled(self, toggle):
     self.registerFixedVolumeToItself = toggle
 
+  # JU 02/05/2024 connect the register-to-itself to the logic component:
+  def onApplyBiasCorrectionToggled(self, toggle):
+    self.applyBiasCorrection = toggle
+    
 #
 # SequenceRegistrationLogic
 #
@@ -521,8 +547,32 @@ class SequenceRegistrationLogic(ScriptedLoadableModuleLogic):
     return None
 
   # JU 08/05/2024: Appended input argument registerFixedVolumeToItself with default value FALSE
+  # JU 04/05/2024: Create a function to call the CLI module N4ITKBiasCorrection:
+  def applyN4ITKBiasCorrection(self, inputVolumeNode):
+    """Apply N4ITKBiasCorrection by calling the CLI module"""
+    # JU: Set parameters for N4ITKBiasCorrection (using default config values)
+    parameters = {}
+    parameters["inputImageName"] = inputVolumeNode
+    # JU: Do I need to create a new node? should there be a more efficient way?
+    outputVolumeNode = slicer.mrmlScene.AddNewNodeByClass("vtkMRMLScalarVolumeNode")
+    parameters["outputImageName"] = outputVolumeNode
+    self.elastixLogic.addLog("**** Pre-Proc Step: Applying Bias Correction to the volume, please wait...")
+    # Execute
+    cliNode = slicer.cli.runSync(self.n4itkbiasfieldcorrection, None, parameters)
+    # Process results
+    if cliNode.GetStatus() & cliNode.ErrorsMask:
+      # error
+      errorText = cliNode.GetErrorText()
+      slicer.mrmlScene.RemoveNode(cliNode)
+      raise ValueError("CLI execution failed: " + errorText)
+    # success
+    slicer.mrmlScene.RemoveNode(cliNode)
+    print(f'Output Node N4ITK: {outputVolumeNode}')
+    return outputVolumeNode
+  
+  # JU 04/05/2024: Appended input argument applyBiasCorrection with default value FALSE
   def registerVolumeSequence(self, inputVolSeq, outputVolSeq, outputTransformSeq, fixedVolumeItemNumber, presetIndex, computeMovingToFixedTransform = True,
-    startFrameIndex=None, endFrameIndex=None, registeredFixedToItself=False):
+    startFrameIndex=None, endFrameIndex=None, registeredFixedToItself=False, applyBiasCorrection=False):
     """
     computeMovingToFixedTransform: if True then moving->fixed else fixed->moving transforms are computed
     """
@@ -543,6 +593,12 @@ class SequenceRegistrationLogic(ScriptedLoadableModuleLogic):
     sequencesModule.logic().UpdateAllProxyNodes()
     slicer.app.processEvents()
     fixedVolume = fixedSeqBrowser.GetProxyNode(inputVolSeq)
+    # JU 04/05/2024: If required, apply bias correction to the fixed volume:
+    if applyBiasCorrection:
+      self.n4itkbiasfieldcorrection = slicer.modules.n4itkbiasfieldcorrection
+      fixedVolume = self.applyN4ITKBiasCorrection(fixedVolume)
+      self.elastixLogic.addLog("---------------------")
+    print(f'Fixed Volume (Node): {fixedVolume}')
 
     movingSeqBrowser = slicer.mrmlScene.AddNewNodeByClass("vtkMRMLSequenceBrowserNode")
     movingSeqBrowser.SetAndObserveMasterSequenceNodeID(inputVolSeq.GetID())
@@ -580,6 +636,9 @@ class SequenceRegistrationLogic(ScriptedLoadableModuleLogic):
 
         # JU 08/05/2024: Include the registered-to-itself flag value as part of the logic evaluation:
         if (movingVolumeItemNumber != fixedVolumeItemNumber) | registeredFixedToItself:
+          # JU 04/05/2024: If required, apply bias correction prior running the registration:
+          if applyBiasCorrection:
+            movingVolume = self.applyN4ITKBiasCorrection(movingVolume)
           self.elastixLogic.registerVolumes(
             fixedVolume, movingVolume,
             outputVolumeNode = outputVol,
