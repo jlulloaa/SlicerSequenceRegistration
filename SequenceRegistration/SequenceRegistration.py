@@ -42,9 +42,10 @@ class SequenceRegistrationWidget(ScriptedLoadableModuleWidget):
     self.logic = SequenceRegistrationLogic()
     self.logic.logCallback = self.addLog
     
-    # JU 08/05/2024: Initialise the registerFixedVolumeToItself flag:
+    # JU: Initialise the registerFixedVolumeToItself and applyBiasCorrection flags:
     self.registerFixedVolumeToItself = False
-
+    self.applyBiasCorrection = False
+    
     #
     # Parameters Area
     #
@@ -117,18 +118,18 @@ class SequenceRegistrationWidget(ScriptedLoadableModuleWidget):
     parametersFormLayout.addRow("Preset:", self.registrationPresetSelector)
     
     #
-    # Pre-Processing Area (JU 04/05/2024)
-    #
-    
+    # JU: Pre-Processing tab
+    #    
     preProcCollapsibleButton = ctk.ctkCollapsibleButton()
     preProcCollapsibleButton.text = "Pre-Processing"
     preProcCollapsibleButton.collapsed = 1
     self.layout.addWidget(preProcCollapsibleButton)
     
-    # Layout within the dummy collapsible button (JU 04/05/2024)
+    # JU: Layout within the dummy collapsible button
     preProcFormLayout = qt.QFormLayout(preProcCollapsibleButton)
     
-    # Select to apply bias correction filter (N4ITK)
+    # JU: Select to apply bias correction filter
+    #  For now it only gives the option to apply N4ITK filter, but more options can be added in the future
     self.applyN4ITKBiasCorrectionCheckbox = qt.QCheckBox(" ")
     self.applyN4ITKBiasCorrectionCheckbox.checked = False
     label = qt.QLabel("Apply N4ITK Bias Correction:")
@@ -268,9 +269,9 @@ class SequenceRegistrationWidget(ScriptedLoadableModuleWidget):
     self.showDetailedLogDuringExecutionCheckBox.connect("toggled(bool)", self.onShowLogToggled)
     # Check if user selects to create a new preset
     self.registrationPresetSelector.connect("activated(int)", self.onCreatePresetPressed)
-    # JU 08/05/2024 connect the register-to-itself checkbox:
-    self.applyN4ITKBiasCorrectionCheckbox.connect("toggled(bool)", self.onApplyBiasCorrectionToggled)
+    # JU connect the apply-N4ITK-BiasCorrection and register-to-itself checkboxes:
     self.registerFixedVolumeToItselfCheckBox.connect("toggled(bool)", self.onRegisterToItselfToggled)
+    self.applyN4ITKBiasCorrectionCheckbox.connect("toggled(bool)", self.onApplyBiasCorrectionToggled)
 
 
     # Add vertical spacer
@@ -472,8 +473,7 @@ class SequenceRegistrationWidget(ScriptedLoadableModuleWidget):
       endFrameIndex = int(self.sequenceEndItemIndexWidget.value)
       self.logic.elastixLogic.setCustomElastixBinDir(self.customElastixBinDirSelector.currentPath)
       self.logic.logStandardOutput = self.showDetailedLogDuringExecutionCheckBox.checked
-      # JU 08/05/2024: Appended input argument self.registerFixedVolumeToItself
-      # JU 04/05/2024: Added input argument self.applyBiasCorrection
+      # JU Appended input arguments self.registerFixedVolumeToItself and self.applyBiasCorrection
       self.logic.registerVolumeSequence(self.inputSelector.currentNode(),
         self.outputVolumesSelector.currentNode(), self.outputTransformSelector.currentNode(),
         fixedFrameIndex, self.registrationPresetSelector.currentIndex, computeMovingToFixedTransform,
@@ -510,7 +510,7 @@ class SequenceRegistrationWidget(ScriptedLoadableModuleWidget):
   def onRegisterToItselfToggled(self, toggle):
     self.registerFixedVolumeToItself = toggle
 
-  # JU 02/05/2024 connect the register-to-itself to the logic component:
+  # JU connect the apply-bias-correction to the logic component:
   def onApplyBiasCorrectionToggled(self, toggle):
     self.applyBiasCorrection = toggle
     
@@ -546,7 +546,6 @@ class SequenceRegistrationLogic(ScriptedLoadableModuleLogic):
         return browserNode
     return None
 
-  # JU 08/05/2024: Appended input argument registerFixedVolumeToItself with default value FALSE
   # JU 04/05/2024: Create a function to call the CLI module N4ITKBiasCorrection:
   def applyN4ITKBiasCorrection(self, inputVolumeNode):
     """Apply N4ITKBiasCorrection by calling the CLI module"""
@@ -570,7 +569,7 @@ class SequenceRegistrationLogic(ScriptedLoadableModuleLogic):
     print(f'Output Node N4ITK: {outputVolumeNode}')
     return outputVolumeNode
   
-  # JU 04/05/2024: Appended input argument applyBiasCorrection with default value FALSE
+  # JU Appended input arguments registerFixedVolumeToItself and applyBiasCorrection, both with default value FALSE
   def registerVolumeSequence(self, inputVolSeq, outputVolSeq, outputTransformSeq, fixedVolumeItemNumber, presetIndex, computeMovingToFixedTransform = True,
     startFrameIndex=None, endFrameIndex=None, registeredFixedToItself=False, applyBiasCorrection=False):
     """
@@ -593,7 +592,7 @@ class SequenceRegistrationLogic(ScriptedLoadableModuleLogic):
     sequencesModule.logic().UpdateAllProxyNodes()
     slicer.app.processEvents()
     fixedVolume = fixedSeqBrowser.GetProxyNode(inputVolSeq)
-    # JU 04/05/2024: If required, apply bias correction to the fixed volume:
+    # JU: If required, apply bias correction to the fixed volume:
     if applyBiasCorrection:
       self.n4itkbiasfieldcorrection = slicer.modules.n4itkbiasfieldcorrection
       fixedVolume = self.applyN4ITKBiasCorrection(fixedVolume)
